@@ -53,9 +53,8 @@ def main():
         from .configure import configure
         from .build import build
 
-        # Auth: only if no saved cookies
-        if not load_cookies():
-            authenticate()
+        # Auth: always re-authenticate to ensure fresh session
+        authenticate()
         disc_path = discover()
         cfg_path = configure(discovery_path=disc_path)
         build(config_path=cfg_path)
