@@ -46,7 +46,7 @@ def discover() -> str:
 
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
-            user_data_dir="/tmp/lilite_discovery",
+            user_data_dir=str(config.CHROME_PROFILE_DIR),
             channel="chrome",
             headless=False,
             no_viewport=True,
@@ -120,7 +120,7 @@ def _discover_page(page, url: str) -> dict | None:
     page.on("response", on_response)
 
     try:
-        page.goto(url, wait_until="networkidle",
+        page.goto(url, wait_until="domcontentloaded",
                   timeout=config.DISCOVERY_PAGE_LOAD_TIMEOUT_MS)
     except Exception as e:
         log.warning(f"Failed to load {url}: {e}")
