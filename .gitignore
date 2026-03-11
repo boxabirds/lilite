@@ -1,0 +1,8 @@
+data/auth/
+config/linkedin.com/
+*.pyc
+__pycache__/
+.env
+.venv/
+scripts/refresh_auth/linkedin_chrome_profile/
+/tmp/
