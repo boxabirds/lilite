@@ -1,7 +1,8 @@
 """Phase C: Interactive configuration — let user enable/disable discovered items.
 
-Presents a rich terminal menu grouped by page and classification.
-Sensible defaults: core content enabled, ads/trackers/analytics disabled.
+Presents a per-item checkbox menu grouped by page and classification.
+Use arrow keys to navigate, space to toggle, enter to confirm.
+Sensible defaults: core content enabled; ads/trackers/analytics disabled.
 """
 
 import json
@@ -9,10 +10,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from InquirerPy import inquirer
 from rich.console import Console
-from rich.prompt import Confirm
-from rich.table import Table
-from rich.tree import Tree
 
 from . import config
 
@@ -41,87 +40,102 @@ def configure(discovery_path: str | None = None) -> str:
         discovery = json.load(f)
 
     console.print(f"\n[bold]LI Lite Configuration[/bold]")
-    console.print(f"Based on: {disc_file.name}\n")
+    console.print(f"Based on: {disc_file.name}")
+    console.print("Use arrow keys to navigate, space to toggle, enter to confirm.\n")
 
     rules = []
 
     for page_data in discovery.get("pages", []):
         page_url = page_data["url"]
-        console.print(f"\n[bold cyan]{page_url}[/bold cyan]")
 
-        # Group UI components by classification
-        ui_groups = {}
+        # Collect all items for this page with metadata
+        ui_items = []
         for comp in page_data.get("ui_components", []):
             cls = comp.get("classification", "other")
-            ui_groups.setdefault(cls, []).append(comp)
+            item_id = comp.get("id", "unknown")
+            desc = comp.get("description", item_id)[:60]
+            ui_items.append({
+                "item": comp,
+                "type": "ui_component",
+                "classification": cls,
+                "label": f"{desc}",
+                "name": f"ui:{item_id}",
+                "default_keep": cls not in _BLOCK_BY_DEFAULT,
+            })
 
-        # Group API calls by classification
-        api_groups = {}
+        api_items = []
         for call in page_data.get("api_calls", []):
             cls = call.get("classification", "other")
-            api_groups.setdefault(cls, []).append(call)
+            item_id = call.get("id", "unknown")
+            pattern = call.get("url_pattern", call.get("url", ""))[:60]
+            vendor = f" ({call['vendor']})" if call.get("vendor") else ""
+            api_items.append({
+                "item": call,
+                "type": "api_call",
+                "classification": cls,
+                "label": f"{pattern}{vendor}",
+                "name": f"api:{item_id}",
+                "default_keep": cls not in _BLOCK_BY_DEFAULT,
+            })
 
-        # Display and collect decisions for UI components
-        if ui_groups:
-            console.print("\n  [bold]UI Components[/bold]")
-            for cls, items in sorted(ui_groups.items()):
-                console.print(f"\n  [yellow]{cls}[/yellow]")
-                for item in items:
-                    default_on = cls not in _BLOCK_BY_DEFAULT
-                    desc = item.get("description", item.get("id", "unknown"))[:60]
-                    marker = "[green]ON[/green]" if default_on else "[red]OFF[/red]"
-                    console.print(f"    {marker} {item['id'][:30]:30s} — {desc}")
+        all_items = ui_items + api_items
+        if not all_items:
+            continue
 
-                # Ask for the group
-                default_action = "allow" if cls not in _BLOCK_BY_DEFAULT else "block"
-                toggle = Confirm.ask(
-                    f"    Keep all [yellow]{cls}[/yellow] components?",
-                    default=(default_action == "allow"),
-                )
-                action = "allow" if toggle else "hide"
-                for item in items:
-                    if action == "hide":
-                        rules.append({
-                            "id": item["id"],
-                            "type": "ui_component",
-                            "action": "hide",
-                            "selector": item.get("selector", ""),
-                            "scope": item.get("scope", f"url:{page_url}"),
-                            "classification": cls,
-                            "description": item.get("description", ""),
-                        })
-                    # allowed items don't need rules
+        # Build choices grouped by classification
+        choices = []
+        # Group by classification, sorted
+        groups = {}
+        for entry in all_items:
+            groups.setdefault(entry["classification"], []).append(entry)
 
-        # Display and collect decisions for API calls
-        if api_groups:
-            console.print("\n  [bold]API / Network Calls[/bold]")
-            for cls, items in sorted(api_groups.items()):
-                console.print(f"\n  [yellow]{cls}[/yellow]")
-                for item in items:
-                    default_on = cls not in _BLOCK_BY_DEFAULT
-                    desc = item.get("url_pattern", item.get("url", ""))[:60]
-                    vendor = f" ({item['vendor']})" if item.get("vendor") else ""
-                    marker = "[green]ON[/green]" if default_on else "[red]OFF[/red]"
-                    console.print(f"    {marker} {desc}{vendor}")
+        for cls in sorted(groups.keys()):
+            items = groups[cls]
+            blocked = cls in _BLOCK_BY_DEFAULT
+            tag = "BLOCK" if blocked else "KEEP"
+            choices.append({"name": f"── {cls} (default: {tag}) ──", "value": None, "enabled": False})
+            for entry in items:
+                choices.append({
+                    "name": f"  {entry['label']}",
+                    "value": entry["name"],
+                    "enabled": entry["default_keep"],
+                })
 
-                default_action = "allow" if cls not in _BLOCK_BY_DEFAULT else "block"
-                toggle = Confirm.ask(
-                    f"    Allow all [yellow]{cls}[/yellow] calls?",
-                    default=(default_action == "allow"),
-                )
-                action = "allow" if toggle else "block"
-                for item in items:
-                    if action == "block":
-                        rules.append({
-                            "id": item.get("id", "unknown"),
-                            "type": "api_call",
-                            "action": "block",
-                            "url_pattern": item.get("url_pattern", ""),
-                            "scope": item.get("scope", ""),
-                            "classification": cls,
-                            "vendor": item.get("vendor"),
-                            "description": item.get("url_pattern", ""),
-                        })
+        console.print(f"[bold cyan]{page_url}[/bold cyan]")
+        kept = inquirer.checkbox(
+            message="Select items to KEEP (unchecked = blocked/hidden):",
+            choices=choices,
+            cycle=True,
+            instruction="(space=toggle, a=all, i=invert, enter=confirm)",
+        ).execute()
+
+        kept_set = set(kept) if kept else set()
+
+        # Generate rules for items NOT kept
+        for entry in all_items:
+            if entry["name"] not in kept_set:
+                item = entry["item"]
+                if entry["type"] == "ui_component":
+                    rules.append({
+                        "id": item.get("id", "unknown"),
+                        "type": "ui_component",
+                        "action": "hide",
+                        "selector": item.get("selector", ""),
+                        "scope": item.get("scope", f"url:{page_url}"),
+                        "classification": entry["classification"],
+                        "description": item.get("description", ""),
+                    })
+                else:
+                    rules.append({
+                        "id": item.get("id", "unknown"),
+                        "type": "api_call",
+                        "action": "block",
+                        "url_pattern": item.get("url_pattern", ""),
+                        "scope": item.get("scope", ""),
+                        "classification": entry["classification"],
+                        "vendor": item.get("vendor"),
+                        "description": item.get("url_pattern", ""),
+                    })
 
     # Summary
     block_count = sum(1 for r in rules if r["action"] in ("block", "hide"))

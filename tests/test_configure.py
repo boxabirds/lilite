@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -89,6 +89,53 @@ def _mixed_pages():
     ]
 
 
+def _mock_checkbox_returning(kept_names):
+    """Create a mock for inquirer.checkbox that returns the given kept names."""
+    def _factory(*args, **kwargs):
+        mock = MagicMock()
+        mock.execute.return_value = kept_names
+        return mock
+    return _factory
+
+
+def _mock_checkbox_keep_defaults():
+    """Mock that keeps items whose default_keep=True (simulates accepting defaults).
+
+    The checkbox choices have enabled=True for items not in _BLOCK_BY_DEFAULT.
+    We return the values of enabled choices.
+    """
+    def _factory(*args, **kwargs):
+        choices = kwargs.get("choices", [])
+        kept = []
+        for c in choices:
+            if c.get("enabled") and c.get("value") is not None:
+                kept.append(c["value"])
+        mock = MagicMock()
+        mock.execute.return_value = kept
+        return mock
+    return _factory
+
+
+def _mock_checkbox_keep_all():
+    """Mock that keeps ALL items (selects everything)."""
+    def _factory(*args, **kwargs):
+        choices = kwargs.get("choices", [])
+        kept = [c["value"] for c in choices if c.get("value") is not None]
+        mock = MagicMock()
+        mock.execute.return_value = kept
+        return mock
+    return _factory
+
+
+def _mock_checkbox_keep_none():
+    """Mock that keeps NOTHING (deselects everything)."""
+    def _factory(*args, **kwargs):
+        mock = MagicMock()
+        mock.execute.return_value = []
+        return mock
+    return _factory
+
+
 # ===========================================================================
 # 1. _BLOCK_BY_DEFAULT
 # ===========================================================================
@@ -173,10 +220,8 @@ class TestConfigure:
 
         disc_file = _make_discovery(tmp_path, pages=_mixed_pages())
 
-        # Confirm.ask returns its default argument each time
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.side_effect = lambda *a, default=True, **kw: default
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_defaults()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -192,16 +237,14 @@ class TestConfigure:
             assert cls not in blocked_cls, f"{cls} should be allowed by default"
 
     def test_block_everything(self, tmp_path, monkeypatch):
-        """When user blocks everything, all items generate rules."""
+        """When user deselects everything, all items generate rules."""
         import src.config as config
         monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
 
         disc_file = _make_discovery(tmp_path, pages=_mixed_pages())
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            # Confirm.ask "Keep ...?" / "Allow ...?" -> always False -> block/hide
-            mock_confirm.ask.return_value = False
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_none()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -213,15 +256,14 @@ class TestConfigure:
         assert len(rules) == total_ui + total_api
 
     def test_allow_everything(self, tmp_path, monkeypatch):
-        """When user allows everything, zero rules are generated."""
+        """When user selects everything, zero rules are generated."""
         import src.config as config
         monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
 
         disc_file = _make_discovery(tmp_path, pages=_mixed_pages())
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.return_value = True
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_all()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -242,9 +284,8 @@ class TestConfigure:
         pages = [{"url": "https://www.linkedin.com/feed/", "ui_components": [comp], "api_calls": []}]
         disc_file = _make_discovery(tmp_path, pages=pages)
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.side_effect = lambda *a, default=True, **kw: default
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_defaults()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -276,9 +317,8 @@ class TestConfigure:
         pages = [{"url": "https://www.linkedin.com/feed/", "ui_components": [], "api_calls": [api]}]
         disc_file = _make_discovery(tmp_path, pages=pages)
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.side_effect = lambda *a, default=True, **kw: default
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_defaults()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -302,9 +342,8 @@ class TestConfigure:
 
         disc_file = _make_discovery(tmp_path, pages=_mixed_pages())
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.return_value = True
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_all()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -361,10 +400,8 @@ class TestConfigure:
         ]
         disc_file = _make_discovery(tmp_path, pages=pages)
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            # Block everything to make sure the rule appears with "other"
-            mock_confirm.ask.return_value = False
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_none()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
@@ -415,9 +452,8 @@ class TestConfigure:
         ]
         disc_file = _make_discovery(tmp_path, pages=pages)
 
-        with patch("src.configure.Confirm") as mock_confirm:
-            mock_confirm.ask.side_effect = lambda *a, default=True, **kw: default
-
+        with patch("src.configure.inquirer") as mock_inq:
+            mock_inq.checkbox = _mock_checkbox_keep_defaults()
             result_path = configure(discovery_path=str(disc_file))
 
         output = json.loads(Path(result_path).read_text())
