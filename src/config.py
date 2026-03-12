@@ -30,6 +30,14 @@ CREDS_STALE_WARNING_DAYS = int(os.getenv("CREDS_STALE_WARNING_DAYS", "14"))
 DISCOVERY_NAV_DEPTH = int(os.getenv("DISCOVERY_NAV_DEPTH", "1"))
 DISCOVERY_PAGE_LOAD_TIMEOUT_MS = int(os.getenv("DISCOVERY_PAGE_LOAD_TIMEOUT_MS", "60000"))
 DISCOVERY_IDLE_WAIT_MS = int(os.getenv("DISCOVERY_IDLE_WAIT_MS", "10000"))
+DISCOVERY_SCROLL_DISTANCE_PX = int(os.getenv("DISCOVERY_SCROLL_DISTANCE_PX", "2000"))
+DISCOVERY_SCROLL_SETTLE_MS = int(os.getenv("DISCOVERY_SCROLL_SETTLE_MS", "3000"))
+# Minimum element dimension (px) to include in snapshots
+DISCOVERY_MIN_ELEMENT_SIZE_PX = 10
+
+# --- Gemini LLM ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL_ID = os.getenv("GEMINI_MODEL_ID", "gemini-flash-latest")
 
 # --- LinkedIn ---
 LINKEDIN_BASE = "https://www.linkedin.com"

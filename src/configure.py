@@ -1,8 +1,9 @@
-"""Phase C: Interactive configuration — let user enable/disable discovered items.
+"""Phase C: Interactive configuration — let user enable/disable discovered sections.
 
-Presents a per-item checkbox menu grouped by page and classification.
+Presents a per-section checkbox menu grouped by page zone (top-nav,
+left-sidebar, main-feed, right-sidebar, etc.).
 Use arrow keys to navigate, space to toggle, enter to confirm.
-Sensible defaults: core content enabled; ads/trackers/analytics disabled.
+Defaults come from Gemini's analysis (default_action: keep/hide).
 """
 
 import json
@@ -18,16 +19,35 @@ from . import config
 log = logging.getLogger(__name__)
 console = Console()
 
-# Classifications that default to BLOCKED
-_BLOCK_BY_DEFAULT = {
-    "tracking-pixel", "analytics", "ad-network",
-    "promoted-content",
+# Zone display order and labels
+_ZONE_ORDER = [
+    "top-nav", "left-sidebar", "main-feed",
+    "right-sidebar", "messaging", "footer", "overlay", "other",
+]
+
+# Network categories that are essential — never offer these for blocking
+_ESSENTIAL_NETWORK_CATEGORIES = frozenset({
+    "core-data", "social", "messaging", "notifications",
+    "authentication", "infrastructure", "media",
+})
+
+_ZONE_LABELS = {
+    "top-nav": "Top Navigation",
+    "left-sidebar": "Left Sidebar",
+    "main-feed": "Main Feed",
+    "right-sidebar": "Right Sidebar",
+    "messaging": "Messaging",
+    "footer": "Footer",
+    "overlay": "Overlays",
+    "other": "Other",
 }
+
+# Maximum label length for the configuration menu
+_MAX_LABEL_LENGTH = 80
 
 
 def configure(discovery_path: str | None = None) -> str:
     """Run interactive configuration. Returns path to config JSON."""
-    # Find discovery file
     if discovery_path:
         disc_file = Path(discovery_path)
     else:
@@ -47,53 +67,67 @@ def configure(discovery_path: str | None = None) -> str:
 
     for page_data in discovery.get("pages", []):
         page_url = page_data["url"]
+        ui_components = page_data.get("ui_components", [])
+        api_calls = page_data.get("api_calls", [])
 
-        # Collect all items for this page with metadata
-        ui_items = []
-        for comp in page_data.get("ui_components", []):
-            cls = comp.get("classification", "other")
-            item_id = comp.get("id", "unknown")
-            desc = comp.get("description", item_id)[:60]
-            ui_items.append({
+        if not ui_components and not api_calls:
+            continue
+
+        # Build items for the menu
+        all_items = []
+
+        # UI sections grouped by zone
+        for comp in ui_components:
+            name = comp.get("name") or comp.get("description") or comp.get("id", "unknown")
+            default_keep = comp.get("default_action", "keep") == "keep"
+            zone = comp.get("zone", "other")
+
+            all_items.append({
                 "item": comp,
                 "type": "ui_component",
-                "classification": cls,
-                "label": f"{desc}",
-                "name": f"ui:{item_id}",
-                "default_keep": cls not in _BLOCK_BY_DEFAULT,
+                "zone": zone,
+                "label": _truncate(name, _MAX_LABEL_LENGTH),
+                "name": f"ui:{comp.get('id', 'unknown')}",
+                "default_keep": default_keep,
             })
 
-        api_items = []
-        for call in page_data.get("api_calls", []):
-            cls = call.get("classification", "other")
-            item_id = call.get("id", "unknown")
-            pattern = call.get("url_pattern", call.get("url", ""))[:60]
-            vendor = f" ({call['vendor']})" if call.get("vendor") else ""
-            api_items.append({
-                "item": call,
-                "type": "api_call",
-                "classification": cls,
-                "label": f"{pattern}{vendor}",
-                "name": f"api:{item_id}",
-                "default_keep": cls not in _BLOCK_BY_DEFAULT,
-            })
+        # Network blocking disabled — only offering visual changes for now
+        # TODO: re-enable when network classification is reliable
+        # for call in api_calls:
+        #     category = call.get("category", "other")
+        #     if category in _ESSENTIAL_NETWORK_CATEGORIES:
+        #         continue
+        #     item_id = call.get("id", "unknown")
+        #     call_name = call.get("name", call.get("url_pattern", "unknown"))
+        #     default_keep = call.get("default_action", "keep") == "keep"
+        #     zone_label = f"network:{category}"
+        #     all_items.append({
+        #         "item": call,
+        #         "type": "api_call",
+        #         "zone": zone_label,
+        #         "label": _truncate(call_name, _MAX_LABEL_LENGTH),
+        #         "name": f"api:{item_id}",
+        #         "default_keep": default_keep,
+        #     })
 
-        all_items = ui_items + api_items
         if not all_items:
             continue
 
-        # Build choices grouped by classification
+        # Build choices grouped by zone
         choices = []
-        # Group by classification, sorted
         groups = {}
         for entry in all_items:
-            groups.setdefault(entry["classification"], []).append(entry)
+            groups.setdefault(entry["zone"], []).append(entry)
 
-        for cls in sorted(groups.keys()):
-            items = groups[cls]
-            blocked = cls in _BLOCK_BY_DEFAULT
-            tag = "BLOCK" if blocked else "KEEP"
-            choices.append({"name": f"── {cls} (default: {tag}) ──", "value": None, "enabled": False})
+        # Sort zones in display order
+        zone_order = _ZONE_ORDER + ["network"]
+        sorted_zones = sorted(groups.keys(),
+                              key=lambda z: zone_order.index(z) if z in zone_order else 99)
+
+        for zone in sorted_zones:
+            items = groups[zone]
+            label = _ZONE_LABELS.get(zone, zone.replace("-", " ").title())
+            choices.append({"name": f"── {label} ──", "value": None, "enabled": False})
             for entry in items:
                 choices.append({
                     "name": f"  {entry['label']}",
@@ -120,10 +154,11 @@ def configure(discovery_path: str | None = None) -> str:
                         "id": item.get("id", "unknown"),
                         "type": "ui_component",
                         "action": "hide",
-                        "selector": item.get("selector", ""),
+                        "xpath": item.get("xpath", ""),
+                        "selector": item.get("selector"),
                         "scope": item.get("scope", f"url:{page_url}"),
-                        "classification": entry["classification"],
-                        "description": item.get("description", ""),
+                        "zone": entry["zone"],
+                        "description": item.get("name") or item.get("description", ""),
                     })
                 else:
                     rules.append({
@@ -132,15 +167,15 @@ def configure(discovery_path: str | None = None) -> str:
                         "action": "block",
                         "url_pattern": item.get("url_pattern", ""),
                         "scope": item.get("scope", ""),
-                        "classification": entry["classification"],
-                        "vendor": item.get("vendor"),
-                        "description": item.get("url_pattern", ""),
+                        "category": item.get("category", "other"),
+                        "description": item.get("name") or item.get("url_pattern", ""),
                     })
 
     # Summary
-    block_count = sum(1 for r in rules if r["action"] in ("block", "hide"))
+    hide_count = sum(1 for r in rules if r["action"] == "hide")
+    block_count = sum(1 for r in rules if r["action"] == "block")
     console.print(f"\n[bold green]Configuration complete:[/bold green] "
-                  f"{block_count} items will be blocked/hidden")
+                  f"{hide_count} sections hidden, {block_count} network calls blocked")
 
     # Save
     datestamp = datetime.now().strftime("%Y%m%d-%H%M")
@@ -155,6 +190,13 @@ def configure(discovery_path: str | None = None) -> str:
 
     console.print(f"Saved to {output_path}")
     return str(output_path)
+
+
+def _truncate(text: str, max_len: int) -> str:
+    """Truncate text to max_len, adding ellipsis if needed."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1] + "…"
 
 
 def _find_latest_discovery() -> Path | None:
